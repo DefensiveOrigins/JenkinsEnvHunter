@@ -1,98 +1,82 @@
-#!/usr/bin/env python3
-"""
-JenkinsEnvHunter.py — Scan Jenkins builds for sensitive environment variables.
-"""
-
-import re
-import sys
-import argparse
 import requests
-from requests.auth import HTTPBasicAuth
+import re
+import argparse
+from urllib.parse import urljoin
 
-DEFAULT_PATTERN = r"(user|pass|key|auth)"
+SENSITIVE_KEYS = re.compile(r"(user|pass|key|auth|token|secret)", re.IGNORECASE)
 
-def setup_parser():
-    parser = argparse.ArgumentParser(
-        description=__doc__,
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter
-    )
-    parser.add_argument('-u', '--url', required=True, help='Jenkins base URL')
-    parser.add_argument('-n', '--username', required=True, help='Jenkins username or API user')
-    parser.add_argument('-t', '--token', required=True, help='Jenkins API token or password')
-    parser.add_argument('-p', '--pattern', default=DEFAULT_PATTERN, help='Regex for sensitive var names (case-insensitive)')
-    parser.add_argument('-j', '--jobs', nargs='+', help='Only scan specified jobs; default: all jobs')
-    parser.add_argument('-o', '--output', help='Write report to FILE instead of console')
-    parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose output')
-    return parser
+def get_all_jobs(base_url, auth_provided):
+    api_url = urljoin(base_url, "/api/json?tree=jobs[name,url]")
+    response = requests.get(api_url, auth=auth_provided) if auth_provided else requests.get(api_url)
+    response.raise_for_status()
+    return response.json().get("jobs", [])
 
-def get_json(session, url):
-    resp = session.get(url, params={'pretty': 'true'})
-    resp.raise_for_status()
-    return resp.json()
+def get_builds_for_job(job_url, auth_provided):
+    api_url = urljoin(job_url, "api/json?tree=builds[number,url]")
+    response = requests.get(api_url, auth=auth_provided) if auth_provided else requests.get(api_url)
+    response.raise_for_status()
+    return response.json().get("builds", [])
 
-def find_sensitive(env_vars, pattern):
-    regex = re.compile(pattern, re.IGNORECASE)
-    return {k: v for k, v in env_vars.items() if regex.search(k)}
+def get_env_vars(build_url, auth_provided):
+    env_url = urljoin(build_url, "injectedEnvVars/api/json")
+    try:
+        response = requests.get(env_url, auth=auth_provided) if auth_provided else requests.get(env_url)
+        if response.status_code != 200:
+            return {}
+        return response.json().get("envMap", {})
+    except requests.RequestException:
+        return {}
 
-def scan_jobs(session, base_url, jobs_list, pattern, verbose):
-    report = []
-    all_jobs = get_json(session, f"{base_url}/api/json")['jobs']
-    for job in all_jobs:
-        name = job['name']
-        if jobs_list and name not in jobs_list:
-            continue
-        if verbose:
-            print(f"🔍 Scanning job: {name}")
-        job_info = get_json(session, f"{base_url}/job/{name}/api/json?depth=1")
-        for build in job_info.get('builds', []):
-            num = build['number']
-            if verbose:
-                print(f" └ Build #{num}")
-            url = f"{base_url}/job/{name}/{num}/injectedEnvVars/export"
-            resp = session.get(url, headers={'Accept': 'application/json'})
-            if resp.status_code != 200:
-                continue
-            env = resp.json()
-            leaks = find_sensitive(env, pattern)
-            if leaks:
-                report.append({'job': name, 'build': num, 'leaks': leaks})
-    return report
+def scan_env_vars(env_vars):
+    findings = {}
+    for key, value in env_vars.items():
+        if SENSITIVE_KEYS.search(key) or SENSITIVE_KEYS.search(str(value)):
+            findings[key] = value
+    return findings
 
-def generate_report(report):
-    lines = []
-    if report:
-        lines.append("⚠️ Sensitive env variables found:")
-        for item in report:
-            lines.append(f"- {item['job']} build #{item['build']}:")
-            for k in item['leaks']:
-                lines.append(f"    • {k}")
-    else:
-        lines.append("✅ No sensitive variables detected.")
-    return "\n".join(lines)
+def write_finding(output_file, build_url, findings):
+    with open(output_file, "a", encoding="utf-8") as f:
+        f.write(f"[!] Sensitive data found in build: {build_url}\n")
+        for k, v in findings.items():
+            f.write(f"    {k}: {v}\n")
+        f.write("\n")
 
 def main():
-    parser = setup_parser()
+    parser = argparse.ArgumentParser(description="Scan Jenkins builds for sensitive environment variables.")
+    parser.add_argument("--url", required=True, help="Base URL of Jenkins (e.g., http://jenkins.local/)")
+    parser.add_argument("--user", help="Jenkins username (optional)")
+    parser.add_argument("--token", help="Jenkins API token or password (optional)")
+    parser.add_argument("--output", help="Output file path (optional)")
     args = parser.parse_args()
 
-    session = requests.Session()
-    session.auth = HTTPBasicAuth(args.username, args.token)
-    session.verify = True
+    auth_provided = (args.user, args.token) if args.user and args.token else None
+    output_file = args.output
 
-    try:
-        report = scan_jobs(session, args.url, args.jobs, args.pattern, args.verbose)
-    except Exception as e:
-        print(f"❌ Scan error: {e}", file=sys.stderr)
-        sys.exit(1)
+    if output_file:
+        with open(output_file, "w", encoding="utf-8") as f:
+            f.write("Sensitive Jenkins Build Environment Variables Report\n")
+            f.write("=" * 60 + "\n\n")
 
-    output_text = generate_report(report)
+    jobs = get_all_jobs(args.url, auth_provided)
+    for job in jobs:
+        job_name = job["name"]
+        job_url = job["url"]
+        builds = get_builds_for_job(job_url, auth_provided)
+        print(f"[+] Scanning job: {job_name} ({len(builds)} builds)")
 
-    # Write to file if specified, else to stdout
-    if args.output:
-        with open(args.output, 'w') as f:
-            f.write(output_text + "\n")
-        print(f"📝 Report written to {args.output}")
-    else:
-        print(output_text)
+        for build in builds:
+            build_url = build["url"]
+            env_vars = get_env_vars(build_url, auth_provided)
+            findings = scan_env_vars(env_vars)
+
+            if findings:
+                if output_file:
+                    print(f"[!] Found {len(findings)} sensitive env vars in build: {build_url}")
+                    write_finding(output_file, build_url, findings)
+                else:
+                    print(f"\n[!] Sensitive data found in build: {build_url}")
+                    for k, v in findings.items():
+                        print(f"    {k}: {v}")
 
 if __name__ == "__main__":
     main()
