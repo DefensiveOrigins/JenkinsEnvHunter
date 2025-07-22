@@ -25,10 +25,6 @@ Options
 
 -t, --token       Jenkins API token or password
 
--p, --pattern     Regex for matching env var names (default: (user|pass|key|auth))
-
--j, --jobs       List of specific jobs to scan (default: all jobs)
-
 --output   Save the report to a file (default: print to console)
 
 -h, --help      Display help message and exit
