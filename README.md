@@ -15,7 +15,7 @@ Allows saving scan reports to a file
 # 
 Usage
 ```
-python JenkinsEnvHunter.py -u <JENKINS_URL> -n <USERNAME> -t <API_TOKEN> [-p "<pattern>"] [-j job1 job2 ...] [-o report.txt] [-v]
+python JenkinsEnvHunter.py -url <JENKINS_URL> -n <USERNAME> -t <API_TOKEN>  --output file.txt
 ```
 
 Options
@@ -29,22 +29,15 @@ Options
 
 -j, --jobs       List of specific jobs to scan (default: all jobs)
 
--o, --output   Save the report to a file (default: print to console)
-
--v, --verbose   Show detailed progress in the console
+--output   Save the report to a file (default: print to console)
 
 -h, --help      Display help message and exit
 
 # Examples
 ```
 # Scan entire Jenkins instance:
-python JenkinsEnvHunter.py -u https://jenkins.local -n admin -t SECRET_TOKEN
+python JenkinsEnvHunter.py -url https://jenkins.local 
 
-# Scan specific jobs and output to a file:
-python JenkinsEnvHunter.py -u … -n … -t … -j deploy build-test -o scan_report.txt -v
-
-# Use a custom search pattern:
-python JenkinsEnvHunter.py -u … -n … -t … -p "(secret|token|credential)"
 ```
 
 # Why use this?
