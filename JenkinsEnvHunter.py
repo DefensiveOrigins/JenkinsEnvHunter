@@ -66,12 +66,13 @@ def main():
 
         for build in builds:
             build_url = build["url"]
+            build_number = build.get("number", "?")
             env_vars = get_env_vars(build_url, auth_provided)
             findings = scan_env_vars(env_vars)
 
             if findings:
                 if output_file:
-                    print(f"[!] Found {len(findings)} sensitive env vars in build: {build_url}")
+                    print(f"[!] Found {len(findings)} sensitive env vars in build: {job_name} #{build_number}")
                     write_finding(output_file, build_url, findings)
                 else:
                     print(f"\n[!] Sensitive data found in build: {build_url}")
