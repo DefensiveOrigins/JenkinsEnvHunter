@@ -48,6 +48,7 @@ def main():
     parser.add_argument("--user", help="Jenkins username (optional)")
     parser.add_argument("--token", help="Jenkins API token or password (optional)")
     parser.add_argument("--output", help="Output file path (optional)")
+    parser.add_argument("--quiet", action="store_true", help="Cuts the verbosity (optional)")
     parser.add_argument("--all", action="store_true", help="Include all environment variables, not just sensitive ones")
     args = parser.parse_args()
 
@@ -63,19 +64,20 @@ def main():
     total_sensitive_vars = 0
     total_env_vars = 0
     builds_with_sensitive = 0
-
+    k=""
     jobs = get_all_jobs(args.url, auth_provided)
     for job in jobs:
         job_name = job["name"]
         job_url = job["url"]
         builds = get_builds_for_job(job_url, auth_provided)
 
-        print(f"\n[+] Scanning job: {job_name} ({len(builds)} builds)")
-        with alive_bar(len(builds), title="Scanning builds",length=50,theme='smooth',spinner=None,dual_line=True,monitor="Tasks {count} / {total} ") as bar:
+        if not args.quiet: print(f"\n[+] Scanning job: {job_name} ({len(builds)} builds)")
+        with alive_bar(len(builds), title=f"Scanning {job_name[:40].ljust(40)}",length=10,theme='smooth',spinner=None,dual_line=True,monitor="Build {count} / {total} ") as bar:
             for build in builds:
                 build_url = build["url"]
                 build_number = build.get("number", "?")
-                bar.text(f"\t -> Job: {job_name}  \t Build: {build_number} ")
+                if args.quiet: bar.text(f"\t Total Sensitive EnvVars Discovered: {total_sensitive_vars}  ")
+                if not args.quiet: bar.text(f"\t -> Job: {job_name}  \t Build: {build_number}. **TTL Sensitive EV: {total_sensitive_vars} ")
                 env_vars = get_env_vars(build_url, auth_provided)
                 findings = scan_env_vars(env_vars)
                 vars_to_report = env_vars if args.all else findings
@@ -92,8 +94,7 @@ def main():
                     value_id = f"{k}={v}"
                     if value_id not in seen_values:
                         seen_values.add(value_id)
-                        print(f"\t \033[1m [+] New value discovered: {k} = \033[0m {v}")
-
+                        if not args.quiet: print(f"\t \033[1m [+] New value discovered: {k} = \033[0m {v}")
                 if vars_to_report and output_file:
                     write_finding(output_file, build_url, vars_to_report)
 
