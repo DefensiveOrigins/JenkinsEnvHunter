@@ -2,6 +2,7 @@ import requests
 import re
 import argparse
 from urllib.parse import urljoin
+from alive_progress import alive_bar
 
 SENSITIVE_KEYS = re.compile(r"(user|pass|key|auth|token|secret)", re.IGNORECASE)
 
@@ -59,32 +60,51 @@ def main():
             f.write("=" * 60 + "\n\n")
 
     seen_values = set()
+    total_sensitive_vars = 0
+    total_env_vars = 0
+    builds_with_sensitive = 0
+
     jobs = get_all_jobs(args.url, auth_provided)
     for job in jobs:
         job_name = job["name"]
         job_url = job["url"]
         builds = get_builds_for_job(job_url, auth_provided)
 
-        for build in builds:
-            build_url = build["url"]
-            build_number = build.get("number", "?")
-            print(f"Scanning: {job_name} #{build_number}")
+        print(f"\n[+] Scanning job: {job_name} ({len(builds)} builds)")
+        with alive_bar(len(builds), title="Scanning builds",length=50,theme='smooth',spinner=None,dual_line=True,monitor="Tasks {count} / {total} ") as bar:
+            for build in builds:
+                build_url = build["url"]
+                build_number = build.get("number", "?")
+                bar.text(f"\t -> Job: {job_name}  \t Build: {build_number} ")
+                env_vars = get_env_vars(build_url, auth_provided)
+                findings = scan_env_vars(env_vars)
+                vars_to_report = env_vars if args.all else findings
 
-            env_vars = get_env_vars(build_url, auth_provided)
-            findings = scan_env_vars(env_vars)
-            vars_to_report = env_vars if args.all else findings
+                if findings:
+                    total_sensitive_vars += len(findings)
+                    builds_with_sensitive += 1
 
-            if vars_to_report:
-                print(f"✓ {len(vars_to_report)} {'total' if args.all else 'sensitive'} vars")
+                if args.all:
+                    total_env_vars += len(env_vars)
 
+                # Print only newly discovered values
                 for k, v in vars_to_report.items():
                     value_id = f"{k}={v}"
                     if value_id not in seen_values:
                         seen_values.add(value_id)
-                        print(f" [+] New value discovered: {k} = {v}")
+                        print(f"\t \033[1m [+] New value discovered: {k} = \033[0m {v}")
 
-                if output_file:
+                if vars_to_report and output_file:
                     write_finding(output_file, build_url, vars_to_report)
+
+                bar()
+
+    print("\n[✓] Scan complete.")
+    print(f"    Builds with sensitive data: {builds_with_sensitive}")
+    print(f"    Total sensitive vars found: {total_sensitive_vars}")
+    if args.all:
+        print(f"    Total environment vars seen: {total_env_vars}")
+    print(f"    Unique values discovered: {len(seen_values)}")
 
 if __name__ == "__main__":
     main()
