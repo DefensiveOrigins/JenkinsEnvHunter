@@ -22,6 +22,8 @@ python JenkinsEnvHunter.py -url <JENKINS_URL> --output file.txt --quiet
 ## capture all env vars and save to file and be less noisy
 python JenkinsEnvHunter.py -url --all --output file.txt --quiet
 
+## get it all, and be talkative about it (All envs goto file.txt. Sensistive goto stdout)
+python JenkinsEnvHunter.py -url --all --output file.txt 
 ```
 
 ## Requires Auth:
