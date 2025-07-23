@@ -12,9 +12,21 @@ Supports verbose console output for real-time progress
 
 Allows saving scan reports to a file
 
-# 
-Usage
+# Usage
+
+## No Auth Required
 ```
+## Hunt for sensistive env vars and save to file, and be less noisy
+python JenkinsEnvHunter.py -url <JENKINS_URL> --output file.txt --quiet
+
+## capture all env vars and save to file and be less noisy
+python JenkinsEnvHunter.py -url --all --output file.txt --quiet
+
+```
+
+## Requires Auth:
+```
+## capture all env vars and save to file
 python JenkinsEnvHunter.py -url <JENKINS_URL> -n <USERNAME> -t <API_TOKEN>  --output file.txt --all
 ```
 
