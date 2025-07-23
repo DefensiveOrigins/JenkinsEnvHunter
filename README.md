@@ -15,7 +15,7 @@ Allows saving scan reports to a file
 # 
 Usage
 ```
-python JenkinsEnvHunter.py -url <JENKINS_URL> -n <USERNAME> -t <API_TOKEN>  --output file.txt
+python JenkinsEnvHunter.py -url <JENKINS_URL> -n <USERNAME> -t <API_TOKEN>  --output file.txt --all
 ```
 
 Options
@@ -28,6 +28,8 @@ Options
 --output   Save the report to a file (default: print to console)
 
 -h, --help      Display help message and exit
+
+--all    Gather all environment variables, not just sensitive
 
 # Examples
 ```
