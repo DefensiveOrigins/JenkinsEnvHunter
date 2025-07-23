@@ -1,10 +1,10 @@
 Scan Jenkins builds for sensitive environment variables
 
 # Overview
-JenkinsEnvHunter.py inspects all (or selected) Jenkins jobs and builds, fetches their environment variables (including those from EnvInject), and searches for potentially sensitive keys such as user, pass, key, auth, etc.
+JenkinsEnvHunter.py inspects all  Jenkins jobs and builds, fetches their environment variables (including those from EnvInject), and searches for potentially sensitive keys such as user, pass, key, auth, etc.
 
 # Features
-Scans all Jenkins jobs or a specified subset
+Scans all Jenkins jobs and builds
 
 Searches environment variable names using a customizable regex
 
@@ -19,17 +19,19 @@ python JenkinsEnvHunter.py -url <JENKINS_URL> -n <USERNAME> -t <API_TOKEN>  --ou
 ```
 
 Options
+```
 -u, --url         Jenkins base URL (e.g. https://jenkins.local)
 
 -n, --username   Jenkins username or API user
 
--t, --token       Jenkins API token or password
+-t, --token      Jenkins API token or password
 
---output   Save the report to a file (default: print to console)
+--output         Save the report to a file (default: print to console)
 
--h, --help      Display help message and exit
+-h, --help       Display help message and exit
 
---all    Gather all environment variables, not just sensitive
+--all            Gather all environment variables, not just sensitive
+```
 
 # Examples
 ```
