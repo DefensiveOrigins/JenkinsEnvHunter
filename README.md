@@ -12,6 +12,9 @@ Supports verbose console output for real-time progress
 
 Allows saving scan reports to a file
 
+## Note: 
+I didn't have a great way to test all the diferent authentication types.  If it doesn't work, please make a pull request
+
 # Usage
 
 ## No Auth Required
@@ -29,20 +32,20 @@ python JenkinsEnvHunter.py -url <JENKINS_URL> --all --output file.txt
 ## Requires Auth:
 ```
 ## capture all env vars and save to file
-python JenkinsEnvHunter.py -url <JENKINS_URL> -n <USERNAME> -t <API_TOKEN>  --output file.txt --all
+python JenkinsEnvHunter.py -url <JENKINS_URL> --user <USERNAME> --token <API_TOKEN>  --output file.txt --all
 ```
 
 Options
 ```
--u, --url         Jenkins base URL (e.g. https://jenkins.local)
+--url         Jenkins base URL (e.g. https://jenkins.local)
 
--n, --username   Jenkins username or API user
+--user   Jenkins username or API user
 
--t, --token      Jenkins API token or password
+--token      Jenkins API token or password
 
 --output         Save the report to a file (default: print to console)
 
--h, --help       Display help message and exit
+--help       Display help message and exit
 
 --all            Gather all environment variables, not just sensitive
 ```
@@ -54,14 +57,5 @@ python JenkinsEnvHunter.py -url https://jenkins.local
 
 ```
 
-# Why use this?
-Storing credentials in environment variables is risky. This tool helps:
 
-Audit usage of sensitive keys across builds
-
-Detect accidental leaks early in the pipeline
-
-Encourage use of secure Jenkins credentials management
-
-Parallel scanning support
 
