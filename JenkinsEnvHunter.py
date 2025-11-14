@@ -1,16 +1,66 @@
 import requests
 import re
 import argparse
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse, urlunparse
 from alive_progress import alive_bar
 
 SENSITIVE_KEYS = re.compile(r"(user|pass|key|auth|token|secret)", re.IGNORECASE)
 VERBOSE = False
 QUIET = False
 ERRORS = []
+NO_REDIRECT = False
+ORIGINAL_BASE = None
 
 def _ensure_trailing_slash(url: str) -> str:
     return url if url.endswith('/') else url + '/'
+
+def _apply_no_redirect(target_url: str) -> str:
+    """
+    When NO_REDIRECT is enabled, ensure subsequent requests remain on the
+    originally-provided host:port and do not retain any redirect-added
+    subfolder while still preserving the meaningful resource suffix
+    (e.g. '/job/...', '/api/...').
+
+    Strategy:
+      - Replace scheme+netloc with ORIGINAL_BASE's scheme+netloc.
+      - Try to detect a meaningful resource segment in the target path:
+          1. '/job/'  (job/build paths)
+          2. '/api/'  (API endpoints)
+      - If found, append the suffix from that resource segment to the
+        ORIGINAL_BASE.path. This removes any redirect-added subfolder but
+        preserves the actual resource (api/json, job/...).
+      - If no resource segment is found, fall back to ORIGINAL_BASE.path.
+    """
+    if not NO_REDIRECT or not ORIGINAL_BASE:
+        return target_url
+    try:
+        pt = urlparse(target_url)
+        pb = urlparse(ORIGINAL_BASE)
+
+        # look for known resource anchors in the redirected path
+        resource_idx = -1
+        for anchor in ('/job/', '/api/'):
+            idx = pt.path.find(anchor)
+            if idx != -1:
+                resource_idx = idx
+                break
+
+        if resource_idx != -1:
+            # Preserve ORIGINAL_BASE.path and append the meaningful suffix
+            suffix = pt.path[resource_idx:]
+            if pb.path and pb.path != '/':
+                new_path = pb.path.rstrip('/') + suffix
+            else:
+                new_path = suffix
+        else:
+            # No resource anchor found — use ORIGINAL_BASE path (avoid keeping redirect subfolder)
+            new_path = pb.path if pb.path else '/'
+
+        replaced = pt._replace(scheme=pb.scheme, netloc=pb.netloc, path=new_path)
+        # preserve query/fragment from the target if present
+        return urlunparse(replaced)
+    except Exception:
+        return target_url
 
 def _record_error(message: str, details: str = None):
     # store concise message plus optional details for verbose output
@@ -25,30 +75,34 @@ def _record_error(message: str, details: str = None):
 def get_all_jobs(base_url, auth_provided):
     base = _ensure_trailing_slash(base_url)
     api_url = urljoin(base, "api/json?tree=jobs[name,url]")
+    req_url = _apply_no_redirect(api_url)
     if VERBOSE:
-        print(f"[HTTP] GET {api_url}")
+        note = f" (modified to {req_url})" if req_url != api_url else ""
+        print(f"[HTTP] GET {req_url}{note}")
     try:
-        response = requests.get(api_url, auth=auth_provided) if auth_provided else requests.get(api_url)
+        response = requests.get(req_url, auth=auth_provided, allow_redirects=not NO_REDIRECT)
         if VERBOSE:
-            print(f"[HTTP] {response.status_code} {api_url}")
+            print(f"[HTTP] {response.status_code} {req_url}")
         if response.status_code != 200:
-            _record_error(f"Failed to fetch jobs from {api_url} (HTTP {response.status_code})",
+            _record_error(f"Failed to fetch jobs from {req_url} (HTTP {response.status_code})",
                           response.text[:1000] if VERBOSE else None)
             return []
         return response.json().get("jobs", [])
     except requests.RequestException as e:
-        _record_error(f"Error fetching jobs from {api_url}: {e}", repr(e))
+        _record_error(f"Error fetching jobs from {req_url}: {e}", repr(e))
         return []
 
 def get_builds_for_job(job_url, auth_provided):
     job_base = _ensure_trailing_slash(job_url)
     api_url = urljoin(job_base, "api/json?tree=builds[number,url]")
+    req_url = _apply_no_redirect(api_url)
     if VERBOSE:
-        print(f"[HTTP] GET {api_url}")
+        note = f" (modified to {req_url})" if req_url != api_url else ""
+        print(f"[HTTP] GET {req_url}{note}")
     try:
-        response = requests.get(api_url, auth=auth_provided) if auth_provided else requests.get(api_url)
+        response = requests.get(req_url, auth=auth_provided, allow_redirects=not NO_REDIRECT)
         if VERBOSE:
-            print(f"[HTTP] {response.status_code} {api_url}")
+            print(f"[HTTP] {response.status_code} {req_url}")
         if response.status_code != 200:
             _record_error(f"Failed to fetch builds for job {job_url} (HTTP {response.status_code})",
                           response.text[:1000] if VERBOSE else None)
@@ -61,12 +115,14 @@ def get_builds_for_job(job_url, auth_provided):
 def get_env_vars(build_url, auth_provided):
     build_base = _ensure_trailing_slash(build_url)
     env_url = urljoin(build_base, "injectedEnvVars/api/json")
+    req_url = _apply_no_redirect(env_url)
     if VERBOSE:
-        print(f"[HTTP] GET {env_url}")
+        note = f" (modified to {req_url})" if req_url != env_url else ""
+        print(f"[HTTP] GET {req_url}{note}")
     try:
-        response = requests.get(env_url, auth=auth_provided) if auth_provided else requests.get(env_url)
+        response = requests.get(req_url, auth=auth_provided, allow_redirects=not NO_REDIRECT)
         if VERBOSE:
-            print(f"[HTTP] {response.status_code} {env_url}")
+            print(f"[HTTP] {response.status_code} {req_url}")
         if response.status_code != 200:
             _record_error(f"Failed to fetch env vars for build {build_url} (HTTP {response.status_code})",
                           response.text[:1000] if VERBOSE else None)
@@ -91,7 +147,7 @@ def write_finding(output_file, build_url, vars_to_write):
         f.write("\n")
 
 def main():
-    global VERBOSE, QUIET, ERRORS
+    global VERBOSE, QUIET, ERRORS, NO_REDIRECT, ORIGINAL_BASE
     parser = argparse.ArgumentParser(description="Scan Jenkins builds for environment variables.")
     parser.add_argument("--url", required=True, help="Base URL of Jenkins (e.g., http://jenkins.local/)")
     parser.add_argument("--user", help="Jenkins username (optional)")
@@ -100,11 +156,14 @@ def main():
     parser.add_argument("--quiet", action="store_true", help="Cuts the verbosity (optional)")
     parser.add_argument("--all", action="store_true", help="Include all environment variables, not just sensitive ones")
     parser.add_argument("-v", "--verbose", action="store_true", help="Show HTTP request/response info (for troubleshooting)")
+    parser.add_argument("--noredirect", action="store_true", help="Do not follow redirects and keep requests on the original host:port")
     args = parser.parse_args()
 
     VERBOSE = args.verbose
     QUIET = args.quiet
+    NO_REDIRECT = args.noredirect
     ERRORS = []
+    ORIGINAL_BASE = _ensure_trailing_slash(args.url)
 
     auth_provided = (args.user, args.token) if args.user and args.token else None
     output_file = args.output
@@ -113,6 +172,9 @@ def main():
         with open(output_file, "w", encoding="utf-8") as f:
             f.write("Jenkins Build Environment Variables Report\n")
             f.write("=" * 60 + "\n\n")
+
+    if not QUIET:
+        print(f"\n[+] Jobs to investigate: (resolving...)")
 
     seen_values = set()
     total_sensitive_vars = 0
@@ -126,18 +188,21 @@ def main():
     # show the number of jobs that will be investigated before scanning begins
     if not QUIET:
         print(f"\n[+] Jobs to investigate: {len(jobs)}")
+        if NO_REDIRECT:
+            print("[i] --noredirect enabled: requests will stay on the original host:port")
 
     for job in jobs:
         job_name = job["name"]
         job_url = job["url"]
         builds = get_builds_for_job(job_url, auth_provided)
-        job_count=job_count+1
-        if not QUIET: print(f"\n[+] Scanning job: {job_name} ({len(builds)} builds)")
-        with alive_bar(len(builds), title=f"Scanning {job_name[:40].ljust(40)}",length=10,theme='smooth',spinner=None,dual_line=True,monitor="Build {count} / {total} ") as bar:
+        job_count = job_count + 1
+        if not QUIET:
+            print(f"\n[+] Scanning job: {job_name} ({len(builds)} builds)")
+        with alive_bar(len(builds), title=f"Scanning {job_name[:40].ljust(40)}", length=10, theme='smooth', spinner=None, dual_line=True, monitor="Build {count} / {total} ") as bar:
             for build in builds:
                 build_url = build["url"]
                 build_number = build.get("number", "?")
-                build_count=build_count+1
+                build_count = build_count + 1
                 if QUIET:
                     bar.text(f"\t Total Sensitive EnvVars Discovered: {total_sensitive_vars} -- Unique: {len(seen_values)} --  Jobs: {job_count}/{len(jobs)} -- Builds: {build_count} ")
                 else:
@@ -158,7 +223,8 @@ def main():
                     value_id = f"{k}={v}"
                     if value_id not in seen_values:
                         seen_values.add(value_id)
-                        if not QUIET: print(f"\t \033[1m [+] New value discovered: {k} = \033[0m {v}\n")
+                        if not QUIET:
+                            print(f"\t \033[1m [+] New value discovered: {k} = \033[0m {v}\n")
                 if vars_to_report and output_file:
                     write_finding(output_file, build_url, vars_to_report)
 
