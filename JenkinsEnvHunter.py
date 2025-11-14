@@ -5,27 +5,52 @@ from urllib.parse import urljoin
 from alive_progress import alive_bar
 
 SENSITIVE_KEYS = re.compile(r"(user|pass|key|auth|token|secret)", re.IGNORECASE)
+VERBOSE = False
 
 def get_all_jobs(base_url, auth_provided):
     api_url = urljoin(base_url, "/api/json?tree=jobs[name,url]")
-    response = requests.get(api_url, auth=auth_provided) if auth_provided else requests.get(api_url)
-    response.raise_for_status()
-    return response.json().get("jobs", [])
+    if VERBOSE:
+        print(f"[HTTP] GET {api_url}")
+    try:
+        response = requests.get(api_url, auth=auth_provided) if auth_provided else requests.get(api_url)
+        if VERBOSE:
+            print(f"[HTTP] {response.status_code} {api_url}")
+        response.raise_for_status()
+        return response.json().get("jobs", [])
+    except requests.RequestException as e:
+        if VERBOSE:
+            print(f"[HTTP] ERROR {api_url} -> {e}")
+        raise
 
 def get_builds_for_job(job_url, auth_provided):
     api_url = urljoin(job_url, "api/json?tree=builds[number,url]")
-    response = requests.get(api_url, auth=auth_provided) if auth_provided else requests.get(api_url)
-    response.raise_for_status()
-    return response.json().get("builds", [])
+    if VERBOSE:
+        print(f"[HTTP] GET {api_url}")
+    try:
+        response = requests.get(api_url, auth=auth_provided) if auth_provided else requests.get(api_url)
+        if VERBOSE:
+            print(f"[HTTP] {response.status_code} {api_url}")
+        response.raise_for_status()
+        return response.json().get("builds", [])
+    except requests.RequestException as e:
+        if VERBOSE:
+            print(f"[HTTP] ERROR {api_url} -> {e}")
+        raise
 
 def get_env_vars(build_url, auth_provided):
     env_url = urljoin(build_url, "injectedEnvVars/api/json")
+    if VERBOSE:
+        print(f"[HTTP] GET {env_url}")
     try:
         response = requests.get(env_url, auth=auth_provided) if auth_provided else requests.get(env_url)
+        if VERBOSE:
+            print(f"[HTTP] {response.status_code} {env_url}")
         if response.status_code != 200:
             return {}
         return response.json().get("envMap", {})
-    except requests.RequestException:
+    except requests.RequestException as e:
+        if VERBOSE:
+            print(f"[HTTP] ERROR {env_url} -> {e}")
         return {}
 
 def scan_env_vars(env_vars):
@@ -43,6 +68,7 @@ def write_finding(output_file, build_url, vars_to_write):
         f.write("\n")
 
 def main():
+    global VERBOSE
     parser = argparse.ArgumentParser(description="Scan Jenkins builds for environment variables.")
     parser.add_argument("--url", required=True, help="Base URL of Jenkins (e.g., http://jenkins.local/)")
     parser.add_argument("--user", help="Jenkins username (optional)")
@@ -50,7 +76,10 @@ def main():
     parser.add_argument("--output", help="Output file path (optional)")
     parser.add_argument("--quiet", action="store_true", help="Cuts the verbosity (optional)")
     parser.add_argument("--all", action="store_true", help="Include all environment variables, not just sensitive ones")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Show HTTP request/response info (for troubleshooting)")
     args = parser.parse_args()
+
+    VERBOSE = args.verbose
 
     auth_provided = (args.user, args.token) if args.user and args.token else None
     output_file = args.output
