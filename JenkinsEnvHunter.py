@@ -6,9 +6,21 @@ from alive_progress import alive_bar
 
 SENSITIVE_KEYS = re.compile(r"(user|pass|key|auth|token|secret)", re.IGNORECASE)
 VERBOSE = False
+QUIET = False
+ERRORS = []
 
 def _ensure_trailing_slash(url: str) -> str:
     return url if url.endswith('/') else url + '/'
+
+def _record_error(message: str, details: str = None):
+    # store concise message plus optional details for verbose output
+    ERRORS.append((message, details))
+    # Always show a short message unless the user asked for quiet
+    if not QUIET:
+        print(f"[!] {message}")
+    # If verbose, show details (exception text / response body)
+    if VERBOSE and details:
+        print(f"    -> {details}")
 
 def get_all_jobs(base_url, auth_provided):
     base = _ensure_trailing_slash(base_url)
@@ -19,12 +31,14 @@ def get_all_jobs(base_url, auth_provided):
         response = requests.get(api_url, auth=auth_provided) if auth_provided else requests.get(api_url)
         if VERBOSE:
             print(f"[HTTP] {response.status_code} {api_url}")
-        response.raise_for_status()
+        if response.status_code != 200:
+            _record_error(f"Failed to fetch jobs from {api_url} (HTTP {response.status_code})",
+                          response.text[:1000] if VERBOSE else None)
+            return []
         return response.json().get("jobs", [])
     except requests.RequestException as e:
-        if VERBOSE:
-            print(f"[HTTP] ERROR {api_url} -> {e}")
-        raise
+        _record_error(f"Error fetching jobs from {api_url}: {e}", repr(e))
+        return []
 
 def get_builds_for_job(job_url, auth_provided):
     job_base = _ensure_trailing_slash(job_url)
@@ -35,12 +49,14 @@ def get_builds_for_job(job_url, auth_provided):
         response = requests.get(api_url, auth=auth_provided) if auth_provided else requests.get(api_url)
         if VERBOSE:
             print(f"[HTTP] {response.status_code} {api_url}")
-        response.raise_for_status()
+        if response.status_code != 200:
+            _record_error(f"Failed to fetch builds for job {job_url} (HTTP {response.status_code})",
+                          response.text[:1000] if VERBOSE else None)
+            return []
         return response.json().get("builds", [])
     except requests.RequestException as e:
-        if VERBOSE:
-            print(f"[HTTP] ERROR {api_url} -> {e}")
-        raise
+        _record_error(f"Error fetching builds for job {job_url}: {e}", repr(e))
+        return []
 
 def get_env_vars(build_url, auth_provided):
     build_base = _ensure_trailing_slash(build_url)
@@ -52,11 +68,12 @@ def get_env_vars(build_url, auth_provided):
         if VERBOSE:
             print(f"[HTTP] {response.status_code} {env_url}")
         if response.status_code != 200:
+            _record_error(f"Failed to fetch env vars for build {build_url} (HTTP {response.status_code})",
+                          response.text[:1000] if VERBOSE else None)
             return {}
         return response.json().get("envMap", {})
     except requests.RequestException as e:
-        if VERBOSE:
-            print(f"[HTTP] ERROR {env_url} -> {e}")
+        _record_error(f"Error fetching env vars for build {build_url}: {e}", repr(e))
         return {}
 
 def scan_env_vars(env_vars):
@@ -74,7 +91,7 @@ def write_finding(output_file, build_url, vars_to_write):
         f.write("\n")
 
 def main():
-    global VERBOSE
+    global VERBOSE, QUIET, ERRORS
     parser = argparse.ArgumentParser(description="Scan Jenkins builds for environment variables.")
     parser.add_argument("--url", required=True, help="Base URL of Jenkins (e.g., http://jenkins.local/)")
     parser.add_argument("--user", help="Jenkins username (optional)")
@@ -86,6 +103,8 @@ def main():
     args = parser.parse_args()
 
     VERBOSE = args.verbose
+    QUIET = args.quiet
+    ERRORS = []
 
     auth_provided = (args.user, args.token) if args.user and args.token else None
     output_file = args.output
@@ -103,19 +122,26 @@ def main():
     job_count=0
     build_count=0
     jobs = get_all_jobs(args.url, auth_provided)
+
+    # show the number of jobs that will be investigated before scanning begins
+    if not QUIET:
+        print(f"\n[+] Jobs to investigate: {len(jobs)}")
+
     for job in jobs:
         job_name = job["name"]
         job_url = job["url"]
         builds = get_builds_for_job(job_url, auth_provided)
         job_count=job_count+1
-        if not args.quiet: print(f"\n[+] Scanning job: {job_name} ({len(builds)} builds)")
+        if not QUIET: print(f"\n[+] Scanning job: {job_name} ({len(builds)} builds)")
         with alive_bar(len(builds), title=f"Scanning {job_name[:40].ljust(40)}",length=10,theme='smooth',spinner=None,dual_line=True,monitor="Build {count} / {total} ") as bar:
             for build in builds:
                 build_url = build["url"]
                 build_number = build.get("number", "?")
                 build_count=build_count+1
-                if args.quiet: bar.text(f"\t Total Sensitive EnvVars Discovered: {total_sensitive_vars} -- Unique: {len(seen_values)} --  Jobs: {job_count}/{len(jobs)} -- Builds: {build_count} ")
-                if not args.quiet: bar.text(f"\t -> Job: {job_name}  \t Build: {build_number}. **TTL Sensitive EV: {total_sensitive_vars} -- Total Unique:{len(seen_values)}")
+                if QUIET:
+                    bar.text(f"\t Total Sensitive EnvVars Discovered: {total_sensitive_vars} -- Unique: {len(seen_values)} --  Jobs: {job_count}/{len(jobs)} -- Builds: {build_count} ")
+                else:
+                    bar.text(f"\t -> Job: {job_name}  \t Build: {build_number}. **TTL Sensitive EV: {total_sensitive_vars} -- Total Unique:{len(seen_values)}")
                 env_vars = get_env_vars(build_url, auth_provided)
                 findings = scan_env_vars(env_vars)
                 vars_to_report = env_vars if args.all else findings
@@ -132,12 +158,13 @@ def main():
                     value_id = f"{k}={v}"
                     if value_id not in seen_values:
                         seen_values.add(value_id)
-                        if not args.quiet: print(f"\t \033[1m [+] New value discovered: {k} = \033[0m {v}\n")
+                        if not QUIET: print(f"\t \033[1m [+] New value discovered: {k} = \033[0m {v}\n")
                 if vars_to_report and output_file:
                     write_finding(output_file, build_url, vars_to_report)
 
                 bar()
 
+    # Summary
     print("\n[✓] Scan complete.")
     print(f"    Total Jobs {len(jobs)}      Total Builds {build_count}")
     print(f"    Builds with sensitive data: {builds_with_sensitive}")
@@ -147,6 +174,14 @@ def main():
     print(f"    Unique values discovered: {len(seen_values)}")
     if output_file:
         print(f"    Variables Saved To: {output_file}")
+
+    # Print concise error summary at end (unless quiet). Details already printed when VERBOSE.
+    if ERRORS and not QUIET:
+        print(f"\n[!] {len(ERRORS)} HTTP error(s) encountered during the scan:")
+        for idx, (msg, details) in enumerate(ERRORS, 1):
+            print(f"    {idx}. {msg}")
+            if VERBOSE and details:
+                print(f"        Details: {details}")
 
 if __name__ == "__main__":
     main()
