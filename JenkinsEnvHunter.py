@@ -7,8 +7,12 @@ from alive_progress import alive_bar
 SENSITIVE_KEYS = re.compile(r"(user|pass|key|auth|token|secret)", re.IGNORECASE)
 VERBOSE = False
 
+def _ensure_trailing_slash(url: str) -> str:
+    return url if url.endswith('/') else url + '/'
+
 def get_all_jobs(base_url, auth_provided):
-    api_url = urljoin(base_url, "/api/json?tree=jobs[name,url]")
+    base = _ensure_trailing_slash(base_url)
+    api_url = urljoin(base, "api/json?tree=jobs[name,url]")
     if VERBOSE:
         print(f"[HTTP] GET {api_url}")
     try:
@@ -23,7 +27,8 @@ def get_all_jobs(base_url, auth_provided):
         raise
 
 def get_builds_for_job(job_url, auth_provided):
-    api_url = urljoin(job_url, "api/json?tree=builds[number,url]")
+    job_base = _ensure_trailing_slash(job_url)
+    api_url = urljoin(job_base, "api/json?tree=builds[number,url]")
     if VERBOSE:
         print(f"[HTTP] GET {api_url}")
     try:
@@ -38,7 +43,8 @@ def get_builds_for_job(job_url, auth_provided):
         raise
 
 def get_env_vars(build_url, auth_provided):
-    env_url = urljoin(build_url, "injectedEnvVars/api/json")
+    build_base = _ensure_trailing_slash(build_url)
+    env_url = urljoin(build_base, "injectedEnvVars/api/json")
     if VERBOSE:
         print(f"[HTTP] GET {env_url}")
     try:
