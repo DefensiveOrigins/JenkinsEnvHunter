@@ -4,47 +4,19 @@ version = "1.0.0"
 description = "Hunts Jenkins jobs and builds for sensitive information in Jenkins environment variables"
 readme = "README.md"
 requires-python = ">=3.7"
+keywords = [ "jenkins", "security", "environment-variables", "pentest", "infosec",]
+classifiers = [ "Development Status :: 4 - Beta", "Intended Audience :: Information Technology", "Intended Audience :: System Administrators", "Topic :: Security", "Topic :: Software Development :: Testing", "Programming Language :: Python :: 3", "Programming Language :: Python :: 3.7", "Programming Language :: Python :: 3.8", "Programming Language :: Python :: 3.9", "Programming Language :: Python :: 3.10", "Programming Language :: Python :: 3.11",]
+dependencies = [ "requests", "alive-progress",]
+[[project.authors]]
+name = "Defensive Origins"
 
-authors = [
-  { name = "Defensive Origins" }
-]
+[build-system]
+requires = [ "setuptools>=61.0",]
+build-backend = "setuptools.build_meta"
 
-keywords = [
-  "jenkins",
-  "security",
-  "environment-variables",
-  "pentest",
-  "infosec"
-]
-
-classifiers = [
-  "Development Status :: 4 - Beta",
-  "Intended Audience :: Information Technology",
-  "Intended Audience :: System Administrators",
-  "Topic :: Security",
-  "Topic :: Software Development :: Testing",
-  "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.7",
-  "Programming Language :: Python :: 3.8",
-  "Programming Language :: Python :: 3.9",
-  "Programming Language :: Python :: 3.10",
-  "Programming Language :: Python :: 3.11",
-]
-
-dependencies = [
-  "requests",
-  "alive-progress",
-]
-
-# These map to CLI commands installed by pip
 [project.scripts]
 jenkins-env-hunter = "JenkinsEnvHunter:main"
 jenkins-check-noauth = "CheckNoAuth:main"
 
-[build-system]
-requires = ["setuptools>=61.0"]
-build-backend = "setuptools.build_meta"
-
-# Tell setuptools to include the two top-level modules as installable
 [tool.setuptools]
-py-modules = ["JenkinsEnvHunter", "CheckNoAuth"]
+py-modules = [ "JenkinsEnvHunter", "CheckNoAuth",]
