@@ -2,8 +2,8 @@
 
 This repository contains two helper scripts for inspecting Jenkins instances:
 
-- `JenkinsEnvHunter.py` — enumerates Jenkins jobs and builds, fetches environment variables (including EnvInject), and highlights likely sensitive keys.
-- `CheckNoAuth.py` — scans a list of hosts (or a Nessus `.nessus` export) to detect Jenkins instances and whether anonymous access is allowed.
+- 'jenkins-env-hunter' / `JenkinsEnvHunter.py` — enumerates Jenkins jobs and builds, fetches environment variables (including EnvInject), and highlights likely sensitive keys.
+- `jenkins-check-noauth` / `CheckNoAuth.py` — scans a list of hosts (or a Nessus `.nessus` export) to detect Jenkins instances and whether anonymous access is allowed.
 
 Only run these scripts against systems you own or have explicit permission to test.
 
