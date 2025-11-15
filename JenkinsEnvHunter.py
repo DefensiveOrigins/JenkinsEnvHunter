@@ -197,7 +197,7 @@ def main():
         builds = get_builds_for_job(job_url, auth_provided)
         job_count = job_count + 1
         if not QUIET:
-            print(f"\n[+] Scanning job: {job_name} ({len(builds)} builds)")
+            print(f"\n[+] Scanning job ({job_count}/{len(jobs)}): {job_name} ({len(builds)} builds)")
         with alive_bar(len(builds), title=f"Scanning {job_name[:40].ljust(40)}", length=10, theme='smooth', spinner=None, dual_line=True, monitor="Build {count} / {total} ") as bar:
             for build in builds:
                 build_url = build["url"]
