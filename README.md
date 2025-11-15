@@ -54,6 +54,10 @@ Output
 - When anonymous access is detected, the script attempts to check `/manage/` and reports its accessibility.
 - A final summary lists counts and servers allowing anonymous access.
 
+| ![Check No Auth](images/CheckNoAuth.png) |
+|------------------------------------|
+
+
 ---
 
 ## JenkinsEnvHunter.py
@@ -87,6 +91,9 @@ Options summary
 --noredirect   Keep requests on the original host:port (useful when proxied)
 --threads    Number of worker threads (default: 8)
 ```
+
+| ![Env Vars](images/EnvVars.png) |
+|-------------------------------|
 
 Notes
 - Default sensitive-key matcher is `re.compile(r"(user|pass|key|auth|token|secret)", re.IGNORECASE)`. Edit `JenkinsEnvHunter.py` to change matching rules.
