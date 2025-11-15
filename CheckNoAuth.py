@@ -7,9 +7,12 @@ Read a file with Jenkins hosts (one per line: HOST or HOST:PORT) and check:
  - whether it appears to require authentication
 
 Usage:
-  python CheckNoAuth.py [-v] [--ssl] hosts.txt
+  python CheckNoAuth.py -f hosts.txt
+  python CheckNoAuth.py -x scan.nessus
 
 Options:
+  -f, --file       File containing hosts (one per line: HOST or HOST:PORT).
+  -x, --nessus     Nessus .nessus file - extract Jenkins hosts from plugin 65054.
   -v, --verbose    Print every HTTP request/response (verbose).
   --ssl            Use https instead of http for connections.
   -t, --timeout    Request timeout in seconds (default: 5).
@@ -20,7 +23,8 @@ import argparse
 import sys
 import re
 import concurrent.futures
-from typing import Optional, Tuple, List
+import xml.etree.ElementTree as ET
+from typing import Optional, Tuple, List, Set
 from urllib.parse import urlparse
 try:
     import requests
@@ -82,6 +86,80 @@ def parse_host_line(line: str) -> Optional[Tuple[str, int]]:
         return s, DEFAULT_PORT
 
     return s, DEFAULT_PORT
+
+
+def parse_nessus_file(path: str) -> List[Tuple[str, int]]:
+    """
+    Parse a Nessus .nessus XML file and extract Jenkins hosts reported by plugin 65054.
+    Returns a list of (host, port).
+    Strategy:
+      - For each ReportHost, look for ReportItem elements with pluginID="65054"
+      - Try to extract URLs from <plugin_output> or URLs/host:port patterns from text
+      - Fall back to the ReportHost 'name' attribute if no port parsed (use DEFAULT_PORT)
+    """
+    hosts: Set[Tuple[str, int]] = set()
+    try:
+        tree = ET.parse(path)
+        root = tree.getroot()
+    except Exception as e:
+        raise OSError(f"Failed to parse Nessus file '{path}': {e}")
+
+    # Iterate ReportHost elements and find ReportItem with pluginID 65054
+    for rhost in root.findall(".//ReportHost"):
+        host_name = rhost.get("name")
+        # search for report items under this host
+        for item in rhost.findall(".//ReportItem"):
+            if item.get("pluginID") != "65054":
+                continue
+            # plugin_output child often contains details
+            plugin_output = ""
+            po = item.find("plugin_output")
+            if po is not None and po.text:
+                plugin_output = po.text
+            else:
+                # fall back to the text content of the item
+                plugin_output = "".join(item.itertext())
+
+            text = plugin_output or ""
+            # 1) Extract URLs
+            for m in re.finditer(r"https?://[^\s'\"<>()]+", text):
+                try:
+                    u = urlparse(m.group(0))
+                    h = u.hostname
+                    p = u.port or (443 if u.scheme == "https" else DEFAULT_PORT)
+                    if h:
+                        hosts.add((h, int(p)))
+                except Exception:
+                    continue
+
+            # 2) Extract IPv6 [addr]:port or host:port patterns
+            for m in re.finditer(r"\[([0-9a-fA-F:]+)\](?::(\d{1,5}))?", text):
+                h = m.group(1)
+                p = int(m.group(2)) if m.group(2) else DEFAULT_PORT
+                hosts.add((h, p))
+
+            for m in re.finditer(r"\b([0-9]{1,3}(?:\.[0-9]{1,3}){3}|[A-Za-z0-9\.-]+):(\d{1,5})\b", text):
+                h = m.group(1)
+                p = int(m.group(2))
+                hosts.add((h, p))
+
+            # 3) If nothing found, fall back to report host name (use DEFAULT_PORT)
+            if not hosts and host_name:
+                # if host_name contains port, parse it
+                if ":" in host_name and not host_name.startswith("["):
+                    hn, pp = host_name.rsplit(":", 1)
+                    if pp.isdigit():
+                        hosts.add((hn, int(pp)))
+                    else:
+                        hosts.add((host_name, DEFAULT_PORT))
+                else:
+                    # strip brackets for IPv6
+                    if host_name.startswith("[") and host_name.endswith("]"):
+                        hosts.add((host_name[1:-1], DEFAULT_PORT))
+                    else:
+                        hosts.add((host_name, DEFAULT_PORT))
+
+    return sorted(hosts)
 
 
 def detect_jenkins_and_auth(session: requests.Session, scheme: str, host: str, port: int,
@@ -236,7 +314,8 @@ def main(argv=None):
     p = argparse.ArgumentParser(
         description="Check a list of hosts to see if Jenkins is running and whether authentication is required."
     )
-    p.add_argument("hosts_file", metavar="HOSTS_FILE", help="File containing hosts (one per line: HOST or HOST:PORT).")
+    p.add_argument("-f", "--file", metavar="HOSTS_FILE", help="File containing hosts (one per line: HOST or HOST:PORT).")
+    p.add_argument("-x", "--nessus", metavar="NESSUS_FILE", help="Nessus .nessus file - extract Jenkins hosts from plugin 65054.")
     p.add_argument("-v", "--verbose", action="store_true", help="Verbose: print HTTP requests and responses.")
     p.add_argument("--ssl", action="store_true", help="Use HTTPS instead of HTTP.")
     p.add_argument("-t", "--timeout", type=float, default=DEFAULT_TIMEOUT, help=f"Timeout seconds per request (default {DEFAULT_TIMEOUT}).")
@@ -244,13 +323,34 @@ def main(argv=None):
 
     args = p.parse_args(argv)
 
+    if not args.file and not args.nessus:
+        p.error("one of -f/--file or -x/--nessus is required")
+
     scheme = "https" if args.ssl else "http"
-    try:
-        with open(args.hosts_file, "r", encoding="utf-8") as fh:
-            raw_lines = fh.readlines()
-    except OSError as e:
-        print(f"Cannot open hosts file '{args.hosts_file}': {e}", file=sys.stderr)
-        sys.exit(2)
+    raw_lines: List[str] = []
+
+    # Read plain hosts file if provided
+    if args.file:
+        try:
+            with open(args.file, "r", encoding="utf-8") as fh:
+                raw_lines.extend(fh.readlines())
+        except OSError as e:
+            print(f"Cannot open hosts file '{args.file}': {e}", file=sys.stderr)
+            sys.exit(2)
+
+    # Parse nessus file and append extracted hosts
+    if args.nessus:
+        try:
+            nessus_hosts = parse_nessus_file(args.nessus)
+            for h, p in nessus_hosts:
+                # keep same textual format used by parse_host_line, prefer host:port if port not default
+                if ":" in h or p != DEFAULT_PORT:
+                    raw_lines.append(f"{h}:{p}\n")
+                else:
+                    raw_lines.append(f"{h}\n")
+        except OSError as e:
+            print(str(e), file=sys.stderr)
+            sys.exit(2)
 
     # Build a list of hosts to process (skip comments/blank lines)
     hosts: List[Tuple[str, int]] = []
