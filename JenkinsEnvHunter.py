@@ -6,7 +6,7 @@ from alive_progress import alive_bar
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 
-SENSITIVE_KEYS = re.compile(r"(user|pass|key|auth|token|secret)", re.IGNORECASE)
+SENSITIVE_KEYS = re.compile(r"(user|pass|key|auth|token|secret|cookie|cred)", re.IGNORECASE)
 VERBOSE = False
 QUIET = False
 ERRORS = []
