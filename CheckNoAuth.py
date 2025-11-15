@@ -40,6 +40,13 @@ DEFAULT_PORT = 8080
 DEFAULT_TIMEOUT = 5.0
 USER_AGENT = "CheckNoAuth/1.0"
 
+# ANSI colors to make anonymous servers stand out (safe no-op on terminals that don't support)
+CSI = "\033["
+RESET = CSI + "0m"
+BOLD = CSI + "1m"
+GREEN = CSI + "92m"
+YELLOW = CSI + "93m"
+
 
 def parse_host_line(line: str) -> Optional[Tuple[str, int]]:
     """
@@ -270,30 +277,66 @@ def main(argv=None):
 
     jenkins_count = 0
     anon_count = 0
-    anon_servers: List[str] = []
+    # store tuples (host:port, manage_access: Optional[bool])
+    anon_servers: List[Tuple[str, Optional[bool]]] = []
 
     def worker(host: str, port: int):
         """
         Worker executed in thread: create a session and call detect_jenkins_and_auth.
         Returns a tuple:
-          (host, port, is_jenkins, requires_auth, details, error_msg)
+          (host, port, is_jenkins, requires_auth, details, manage_access, manage_details, error_msg)
         If error_msg is not None then the request failed.
         """
         try:
             s = requests.Session()
             s.headers.update({"User-Agent": USER_AGENT})
             is_jenkins, requires_auth, details = detect_jenkins_and_auth(s, scheme, host, port, timeout=args.timeout, verbose=args.verbose)
-            return host, port, is_jenkins, requires_auth, details, None
+            manage_access: Optional[bool] = None
+            manage_details = ""
+            # If anonymous access allowed, check /manage/ endpoint availability
+            if is_jenkins and requires_auth is False:
+                try:
+                    mgr_url = f"{scheme}://{host}:{port}/manage/"
+                    if args.verbose:
+                        print(f"> GET {mgr_url}")
+                    resp = s.get(mgr_url, headers={"User-Agent": USER_AGENT, "Accept": "*/*"},
+                                 timeout=args.timeout, allow_redirects=False, verify=(scheme == "https"))
+                    if args.verbose:
+                        print(f"< {resp.status_code} {resp.reason} ({len(resp.content)} bytes)")
+                    if resp.status_code == 200:
+                        manage_access = True
+                        manage_details = "/manage/ returned 200"
+                        # look for likely manage marker
+                        if "Manage Jenkins" in resp.text or "Manage" in resp.text:
+                            manage_details += " (contains Manage marker)"
+                    elif resp.status_code in (401, 403):
+                        manage_access = False
+                        manage_details = f"/manage/ returned {resp.status_code} (auth required)"
+                    elif resp.status_code in (301, 302, 303, 307, 308):
+                        loc = resp.headers.get("Location", "")
+                        if "/login" in loc or "j_acegi_security" in loc:
+                            manage_access = False
+                            manage_details = f"/manage/ redirected to login ({loc})"
+                        else:
+                            manage_access = None
+                            manage_details = f"/manage/ redirected ({loc})"
+                    else:
+                        manage_access = None
+                        manage_details = f"/manage/ returned {resp.status_code}"
+                except RequestException as e:
+                    manage_access = None
+                    manage_details = f"Error checking /manage/: {e}"
+            return host, port, is_jenkins, requires_auth, details, manage_access, manage_details, None
         except SSLError as e:
-            return host, port, False, None, "", f"SSL error: {e}"
+            return host, port, False, None, "", None, "", f"SSL error: {e}"
         except ConnectionError as e:
-            return host, port, False, None, "", f"Connection failed: {e}"
+            return host, port, False, None, "", None, "", f"Connection failed: {e}"
         except Timeout:
-            return host, port, False, None, "", f"Timeout after {args.timeout}s"
+            return host, port, False, None, "", None, "", f"Timeout after {args.timeout}s"
         except RequestException as e:
-            return host, port, False, None, "", f"Request failed: {e}"
+            return host, port, False, None, "", None, "", f"Request failed: {e}"
         except Exception as e:
-            return host, port, False, None, "", str(e)
+            return host, port, False, None, "", None, "", str(e)
 
     # Use ThreadPoolExecutor for multi-threading (defaults to 1)
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, args.threads)) as exe:
@@ -302,7 +345,7 @@ def main(argv=None):
         if HAS_ALIVE:
             with alive_bar(len(hosts), title="Scanning hosts") as bar:
                 for fut in concurrent.futures.as_completed(futures):
-                    host, port, is_jenkins, requires_auth, details, error = fut.result()
+                    host, port, is_jenkins, requires_auth, details, manage_access, manage_details, error = fut.result()
                     bar()
                     # Print errors immediately
                     if error:
@@ -313,22 +356,39 @@ def main(argv=None):
                         j_text = "Yes" if is_jenkins else "No"
                         if requires_auth is True:
                             a_text = "Required"
+                            line = f"{host}:{port} - Jenkins: {j_text} - Authentication: {a_text}"
                         elif requires_auth is False:
                             a_text = "Not required"
+                            # highlight anonymous servers
+                            line = f"{GREEN}{BOLD}{host}:{port} - Jenkins: {j_text} - Authentication: {a_text}{RESET}"
                         else:
                             a_text = "Unknown"
-                        print(f"{host}:{port} - Jenkins: {j_text} - Authentication: {a_text}")
+                            line = f"{host}:{port} - Jenkins: {j_text} - Authentication: {a_text}"
+                        print(line)
                         if args.verbose:
                             print(f"  Details: {details}")
+                            if manage_access is not None or manage_details:
+                                print(f"  manage/ check: {manage_access} - {manage_details}")
+                        else:
+                            # when not verbose, if anonymous and manage/ check produced info, show manage/ status in-line
+                            if requires_auth is False:
+                                mgr_txt = "unknown"
+                                if manage_access is True:
+                                    mgr_txt = f"{BOLD}{GREEN}manage/ accessible{RESET}"
+                                elif manage_access is False:
+                                    mgr_txt = f"{YELLOW}manage/ requires auth{RESET}"
+                                elif manage_details:
+                                    mgr_txt = manage_details
+                                print(f"  -> {mgr_txt}")
                     # Update counts (done in main thread so no locks needed)
                     if is_jenkins:
                         jenkins_count += 1
                         if requires_auth is False:
                             anon_count += 1
-                            anon_servers.append(f"{host}:{port}")
+                            anon_servers.append((f"{host}:{port}", manage_access))
         else:
             for fut in concurrent.futures.as_completed(futures):
-                host, port, is_jenkins, requires_auth, details, error = fut.result()
+                host, port, is_jenkins, requires_auth, details, manage_access, manage_details, error = fut.result()
                 # Print errors immediately
                 if error:
                     print(f"{host}:{port} - ERROR: {error}")
@@ -338,19 +398,34 @@ def main(argv=None):
                     j_text = "Yes" if is_jenkins else "No"
                     if requires_auth is True:
                         a_text = "Required"
+                        line = f"{host}:{port} - Jenkins: {j_text} - Authentication: {a_text}"
                     elif requires_auth is False:
                         a_text = "Not required"
+                        line = f"{GREEN}{BOLD}{host}:{port} - Jenkins: {j_text} - Authentication: {a_text}{RESET}"
                     else:
                         a_text = "Unknown"
-                    print(f"{host}:{port} - Jenkins: {j_text} - Authentication: {a_text}")
+                        line = f"{host}:{port} - Jenkins: {j_text} - Authentication: {a_text}"
+                    print(line)
                     if args.verbose:
                         print(f"  Details: {details}")
+                        if manage_access is not None or manage_details:
+                            print(f"  manage/ check: {manage_access} - {manage_details}")
+                    else:
+                        if requires_auth is False:
+                            mgr_txt = "unknown"
+                            if manage_access is True:
+                                mgr_txt = f"{BOLD}{GREEN}manage/ accessible{RESET}"
+                            elif manage_access is False:
+                                mgr_txt = f"{YELLOW}manage/ requires auth{RESET}"
+                            elif manage_details:
+                                mgr_txt = manage_details
+                            print(f"  -> {mgr_txt}")
                 # Update counts
                 if is_jenkins:
                     jenkins_count += 1
                     if requires_auth is False:
                         anon_count += 1
-                        anon_servers.append(f"{host}:{port}")
+                        anon_servers.append((f"{host}:{port}", manage_access))
 
     # Summary
     print()
@@ -361,8 +436,13 @@ def main(argv=None):
     if anon_servers:
         print()
         print("Servers that did NOT require authentication:")
-        for s in anon_servers:
-            print(f"  {s}")
+        for host_port, manage_access in anon_servers:
+            if manage_access is True:
+                print(f"  {GREEN}{host_port}{RESET} - manage/ accessible")
+            elif manage_access is False:
+                print(f"  {host_port} - manage/ requires auth")
+            else:
+                print(f"  {host_port} - manage/: unknown")
 
 
 if __name__ == "__main__":
