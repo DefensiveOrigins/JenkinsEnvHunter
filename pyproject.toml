@@ -1,6 +1,6 @@
 [project]
 name = "jenkinsenvhunter"
-version = "1.1.0"
+version = "1.1.1"
 description = "Hunts Jenkins jobs and builds for sensitive information in Jenkins environment variables"
 readme = "README.md"
 requires-python = ">=3.7"
