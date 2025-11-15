@@ -33,11 +33,12 @@ jobs:
         id: bump
         run: |
           python - << 'PY'
+          import os
           import toml
           from pathlib import Path
 
           path = Path("pyproject.toml")
-          data = toml.loads(path.read_text())
+          data = toml.loads(path.read_text(encoding="utf-8"))
 
           version = data["project"]["version"]
 
@@ -46,23 +47,53 @@ jobs:
           new_version = ".".join([major, minor, patch])
 
           data["project"]["version"] = new_version
-
-          path.write_text(toml.dumps(data))
+          path.write_text(toml.dumps(data), encoding="utf-8")
 
           print(f"Bumped version: {version} -> {new_version}")
 
           # Export for later steps
-          with open(Path("$GITHUB_OUTPUT"), "a") as f:
+          github_output = os.environ["GITHUB_OUTPUT"]
+          with open(github_output, "a", encoding="utf-8") as f:
               f.write(f"new_version={new_version}\n")
           PY
 
-      - name: Commit updated version
+      - name: Commit updated version on Publish
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
           git add pyproject.toml
-          git commit -m "Auto-bump version to ${{ steps.bump.outputs.new_version }}"
-          git push
+
+          if git diff --cached --quiet; then
+            echo "No version change to commit on Publish."
+          else
+            git commit -m "Auto-bump version to ${{ steps.bump.outputs.new_version }}"
+            git push origin HEAD:Publish
+          fi
+
+      - name: Sync pyproject.toml to main
+        # Only run if we actually bumped/committed something
+        run: |
+          VERSION="${{ steps.bump.outputs.new_version }}"
+          echo "Syncing version $VERSION to main branch"
+
+          # Make sure we have the latest branches
+          git fetch origin
+
+          # Switch to main and pull latest
+          git checkout main
+          git pull origin main
+
+          # Bring over the bumped pyproject.toml from Publish
+          git checkout Publish -- pyproject.toml
+
+          # Stage and commit if there is a change
+          if git diff --cached --quiet; then
+            echo "No changes to commit on main."
+          else
+            git add pyproject.toml
+            git commit -m "Sync version to ${VERSION} from Publish"
+            git push origin main
+          fi
 
       - name: Build distributions
         run: |
@@ -79,7 +110,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.bump.outputs.new_version }}
-          name: nessus-plugin-hosts v${{ steps.bump.outputs.new_version }}
+          name: JenkinsEnvHunter v${{ steps.bump.outputs.new_version }}
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
